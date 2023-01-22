@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0, ,user-scalable=no" />
+  <script type="module">
+    import {getElevation} from './js/elevation.js';
+    // 組み込み関数は変数に代入できないため、アロー関数でラップ
+    const $ = p => document.querySelector(p)
+
+    $('#exec').addEventListener('click', async () => {
+      const lat = $('#lat').value;
+      const lng = $('#lon').value;
+      // 経度、緯度から標高を求める
+      const {elevation, detail} = await getElevation(lat, lng);
+      $('#elevation').innerText = elevation + 'm';
+      $('#elevationsrc').innerText = detail.title;
+      console.log(`標高：${elevation}m`);
+      console.log(`標高タイル：${detail.title}`);
+    });
+  </script>
+</head>
+
+<body>
+  <h2>緯度、経度から標高を求めるサンプル</h2>
+  <div style="margin-left:1em;">
+    <span>緯度</span><input type="number" id="lat" style="text-align:right;vertical-align:middle;width:12em;" value="35.36072876515965" /> <br>
+    <span>経度</span><input type="number" id="lon" style="text-align:right;vertical-align:middle;width:12em;" value="138.72743565863243" />
+    <input type="button" id="exec" value="実行">
+  </div>
+  <div style="margin-left:2em">
+    <span>標高：</span><span id="elevation"></span><br>
+    <span>データソース：</span><span id="elevationsrc"></span>
+  </div>
+  <div style="margin:2em;">
+    <a href="https://maps.gsi.go.jp/development/demtile.html">標高タイルの詳細仕様</a><br>
+    <a href="https://maps.gsi.go.jp/development/elevation.html">(国土地理院)標高を求めるサンプル</a><br>
+  </div>
+</body>
+</html>

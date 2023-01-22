@@ -1,0 +1,449 @@
+# 緯度・経度から標高を求めるJavaScript
+
+国土地理院で公開しているサンプルスクリプトは、標高を求める関数に標高を表示する機能が混ざっており、利用するためにはいろいろ改修する必要がありました。(モジュール形式にもなっていない)
+(標高を求めるプログラム)[https://maps.gsi.go.jp/development/elevation.html]
+
+
+そこで、ESModule形式にする＋標高を求める関数のみexportする形で書き直してみます。
+
+
+## 使い方
+```javascript
+  import {getElevation} from './js/elevation.js';
+
+  // 富士山頂
+  const lat = 35.36072876515965;
+  const lng = 138.72743565863243;
+
+  // 経度、緯度から標高を求める
+  const {elevation, detail} = await getElevation(lat, lng);
+
+  console.log(`標高：${elevation}m`);
+  console.log(`標高タイル：${detail.title}`);
+```
+
+### 動作確認用html
+
+![img10](./img/img10.png)
+
+
+
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0, ,user-scalable=no" />
+  <script type="module">
+    import {getElevation} from './js/elevation.js';
+    // 組み込み関数は変数に代入できないため、アロー関数でラップ
+    const $ = p => document.querySelector(p)
+
+    $('#exec').addEventListener('click', async () => {
+      const lat = $('#lat').value;
+      const lng = $('#lon').value;
+      // 経度、緯度から標高を求める
+      const {elevation, detail} = await getElevation(lat, lng);
+      $('#elevation').innerText = elevation + 'm';
+      $('#elevationsrc').innerText = detail.title;
+      console.log(`標高：${elevation}m`);
+      console.log(`標高タイル：${detail.title}`);
+    });
+  </script>
+</head>
+<body>
+  <h2>緯度、経度から標高を求めるサンプル</h2>
+  <div style="margin-left:1em;">
+    <span>緯度</span><input type="number" id="lat" style="text-align:right;vertical-align:middle;width:12em;" value="35.36072876515965" /> <br>
+    <span>経度</span><input type="number" id="lon" style="text-align:right;vertical-align:middle;width:12em;" value="138.72743565863243" />
+    <input type="button" id="exec" value="実行">
+  </div>
+  <div style="margin-left:2em">
+    <span>標高：</span><span id="elevation"></span><br>
+    <span>データソース：</span><span id="elevationsrc"></span>
+  </div>
+  <div style="margin:2em;">
+    <a href="https://maps.gsi.go.jp/development/demtile.html">標高タイルの詳細仕様</a><br>
+    <a href="https://maps.gsi.go.jp/development/elevation.html">(国土地理院)標高を求めるサンプル</a><br>
+  </div>
+</body>
+</html>
+```
+
+
+### 標高を求めるソース
+* elevation.js
+
+* [(国土地理院)標高を求めるサンプル](https://maps.gsi.go.jp/development/elevation.html)をもとに、ESModule形式に書き直しています
+* 地図情報を扱うために[Leaflet](https://leafletjs.com/)を利用しています。npmパッケージをESModule形式で提供する[cdn.skypack.dev](https://cdn.skypack.dev)から読み込みます。
+
+
+
+```javascript
+/**
+ * 標高を求めるプログラム
+ * https://maps.gsi.go.jp/development/elevation.html
+ * ・国土地理院の「標高を求めるプログラム(https://maps.gsi.go.jp/development/elevation.html)」を参考にしました
+ * ・関数「getAltitude()」で指定した位置の標高をcallback関数で返します。
+ * ■概略(国土地理院のサンプル解説から引用)
+ * 　・入力した経緯度値から、その場所に該当する「標高タイル」（PNG形式）をクライアントにダウンロードしてきます。
+ * 　・入力した経緯度値に該当する「標高タイル」のピクセルの画素値（RGB値）から、標高値が算出されます。
+ * 　・「標高タイル」には、「DEM5A」、「DEM5B」、「DEM5C」、「DEM10B」、「DEMGM」の4種類があります（本サンプルプログラムでは「DEMGM」は使用していません）。
+ * 　・標高タイルの精度は、「DEM5A」＞「DEM5B」＞「DEM5C」＞「DEM10B」＞「DEMGM」の順に高精度になります。
+ * 　・「DEM5A」、「DEM5B」及び「DEM5C」は、日本全国の範囲でデータが整備されていません。
+ * 　・そのため、本プログラムでは、まず「DEM5A」のデータを探して、なければ「DEM5B」、「DEM5B」もなければ「DEM5C」、最後に「DEM10B」を使用するという処理をしています。
+ * 　・また、海部などデータが存在しないところのピクセル値は、(R,G,B)=(128,0,0)となっています。
+ * 　・標高タイルの詳細仕様はこちらを参照してください。
+ */
+
+import Leaflet from 'https://cdn.skypack.dev/leaflet';
+
+/**
+ * 位置から標高を返す関数(getElevation())の戻り値の型
+ * @typedef ElevationResult
+ * @property {string} elevation
+ * @property {AltitudeDetail} detail
+ */
+
+/**
+ * @typedef UrlInfo
+ * @property {string} title
+ * @property {string} url
+ * @property {number} minzoom
+ * @property {number} maxzoom
+ * @property {number} fixed
+ */
+
+/**
+ * @typedef Position
+ * @property {number} lat
+ * @property {number} lng
+ * @property {number} zoom
+ */
+
+/**
+ * @typedef AltitudeDetail
+ * @property {number} fixed
+ * @property {number} h
+ * @property {Position} pos
+ * @property {string} title
+ * @property {string} type
+ */
+
+/**
+ * @callback altitudeCallback
+ * @param {?string} elevation
+ * @param {?AltitudeDetail} detail
+ * @returns  {void}
+ */
+
+const GSI /*: GSIType*/ = {
+  Footer: Leaflet.Class.extend({
+    initialize() {},
+    destroy() {},
+
+    clear() {
+      if (this._elevationLoader) {
+        this._elevationLoader.cancel();
+      }
+    },
+
+    /**
+     * @param {number} lon
+     * @param {number} lat
+     * @param {number} zoom
+     * @param {altitudeCallback} callback
+     */
+    execRefresh(lon, lat, zoom, callback) {
+      if (!this._elevationLoader) {
+        this._elevationLoader = new GSI.ElevationLoader();
+        this._elevationLoader.on(
+          'load',
+          Leaflet.bind((e) => {
+            if (callback)
+              if (e.h === undefined) {
+                callback(undefined, e);
+              } else {
+                const height = e.h.toFixed(e.fixed !== undefined ? e.fixed : 0);
+                callback(height, e);
+              }
+          }, this)
+        );
+      }
+
+      this._elevationLoader.load({
+        lat: lat,
+        lng: lon,
+        zoom: zoom,
+      });
+    },
+  }),
+
+  ElevationLoader: Leaflet.Evented.extend({
+    _demUrlList: [
+      {
+        title: 'DEM5A',
+        url: 'https://cyberjapandata.gsi.go.jp/xyz/dem5a_png/{z}/{x}/{y}.png',
+        minzoom: 15,
+        maxzoom: 15,
+        fixed: 1,
+      },
+      {
+        title: 'DEM5B',
+        url: 'https://cyberjapandata.gsi.go.jp/xyz/dem5b_png/{z}/{x}/{y}.png',
+        minzoom: 15,
+        maxzoom: 15,
+        fixed: 1,
+      },
+      {
+        title: 'DEM5C',
+        url: 'https://cyberjapandata.gsi.go.jp/xyz/dem5c_png/{z}/{x}/{y}.png',
+        minzoom: 15,
+        maxzoom: 15,
+        fixed: 1,
+      },
+      {
+        title: 'DEM10B',
+        url: 'https://cyberjapandata.gsi.go.jp/xyz/dem_png/{z}/{x}/{y}.png',
+        minzoom: 14,
+        maxzoom: 14,
+        fixed: 0,
+      },
+    ],
+    pow2_8: Math.pow(2, 8),
+    pow2_16: Math.pow(2, 16),
+    pow2_23: Math.pow(2, 23),
+    pow2_24: Math.pow(2, 24),
+
+    initialize(map, options) {
+      this._map = map;
+    },
+
+    /**
+     *
+     * @param {Position} pos
+     */
+    load(pos) {
+      this._destroyImage();
+
+      this._current = {
+        pos: pos,
+        urlList: this._makeUrlList(pos),
+      };
+
+      this._load(this._current);
+    },
+
+    /**
+     *
+     * @param {Position} pos
+     * @returns
+     */
+    _makeUrlList(pos) {
+      const list = [];
+      for (var i = 0; i < this._demUrlList.length; i++) {
+        const demUrl = this._demUrlList[i];
+
+        if (demUrl.maxzoom < demUrl.minzoom) {
+          const buff = demUrl.maxzoom;
+          demUrl.maxzoom = demUrl.minzoom;
+          demUrl.minzoom = buff;
+        }
+
+        const minzoom = demUrl.minzoom;
+
+        for (var z = demUrl.maxzoom; z >= minzoom; z--) {
+          list.push({
+            title: demUrl.title,
+            zoom: z,
+            url: demUrl.url,
+            fixed: demUrl.fixed,
+          });
+        }
+      }
+      return list;
+    },
+
+    _destroyImage() {
+      if (this._img) {
+        this._img.removeEventListener('load', this._imgLoadHandler);
+        this._img.removeEventListener('error', this._imgLoadErrorHandler);
+
+        this._imgLoadHandler = null;
+        this._imgLoadErrorHandler = null;
+
+        delete this._img;
+        this._img = null;
+      }
+    },
+
+    cancel() {
+      this._destroyImage();
+    },
+
+    _load(current) {
+      this._destroyImage();
+
+      if (this._current !== current) return;
+
+      if (!this._current.urlList || this._current.urlList.length <= 0) {
+        // not found
+        this.fire('load', {
+          h: undefined,
+          pos: current.pos,
+        });
+        return;
+      }
+
+      const url = this._current.urlList.shift();
+
+      const tileInfo = this._getTileInfo(
+        this._current.pos.lat,
+        this._current.pos.lng,
+        url.zoom
+      );
+
+      this._img = document.createElement('img');
+      this._img.setAttribute('crossorigin', 'anonymous');
+
+      this._imgLoadHandler = Leaflet.bind(
+        this._onImgLoad,
+        this,
+        url,
+        current,
+        tileInfo,
+        this._img
+      );
+      this._imgLoadErrorHandler = Leaflet.bind(
+        this._onImgLoadError,
+        this,
+        url,
+        current,
+        tileInfo,
+        this._img
+      );
+
+      this._img.addEventListener('load', this._imgLoadHandler);
+      this._img.addEventListener('error', this._imgLoadErrorHandler);
+
+      const makeUrl = (url, tileInfo) => {
+        var result = url.url.replace('{x}', tileInfo.x);
+        result = result.replace('{y}', tileInfo.y);
+        result = result.replace('{z}', url.zoom);
+        return result;
+      };
+
+      this._img.src = makeUrl(url, tileInfo);
+    },
+
+    /**
+     *
+     * @param {UrlInfo} url
+     * @param {any} current
+     * @param {any} tileInfo
+     * @param {any} img
+     * @returns
+     */
+    _onImgLoad(url, current, tileInfo, img) {
+      if (current !== this._current) return;
+
+      if (!this._canvas) {
+        this._canvas = document.createElement('canvas');
+        this._canvas.width = 256;
+        this._canvas.height = 256;
+      }
+
+      var ctx = this._canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+
+      const imgData = ctx.getImageData(0, 0, 256, 256);
+      const idx = tileInfo.pY * 256 * 4 + tileInfo.pX * 4;
+      const r = imgData.data[idx + 0];
+      const g = imgData.data[idx + 1];
+      const b = imgData.data[idx + 2];
+      var h = 0;
+
+      if (r !== 128 || g !== 0 || b !== 0) {
+        const d = r * this.pow2_16 + g * this.pow2_8 + b;
+        h = d < this.pow2_23 ? d : d - this.pow2_24;
+        if (h === -this.pow2_23) h = 0;
+        else h *= 0.01;
+        this._destroyImage();
+
+        this.fire('load', {
+          h: h,
+          title: url.title,
+          fixed: url.fixed,
+          pos: current.pos,
+        });
+      } else {
+        this._onImgLoadError(url, current, tileInfo, img);
+      }
+    },
+
+    /**
+     *
+     * @param {UrlInfo} url
+     * @param {any} current
+     * @param {any} tileInfo
+     * @param {any} img
+     * @returns
+     */
+    _onImgLoadError(url, current, tileInfo, img) {
+      if (current !== this._current) return;
+      this._load(current);
+    },
+
+    /**
+     *
+     * @param {number} lat
+     * @param {number} lng
+     * @param {number} z
+     * @returns
+     */
+    _getTileInfo(lat, lng, z) {
+      const lng_rad = (lng * Math.PI) / 180;
+      const R = 128 / Math.PI;
+      const worldCoordX = R * (lng_rad + Math.PI);
+      const pixelCoordX = worldCoordX * Math.pow(2, z);
+      const tileCoordX = Math.floor(pixelCoordX / 256);
+
+      const lat_rad = (lat * Math.PI) / 180;
+      const worldCoordY =
+        (-R / 2) * Math.log((1 + Math.sin(lat_rad)) / (1 - Math.sin(lat_rad))) +
+        128;
+      const pixelCoordY = worldCoordY * Math.pow(2, z);
+      const tileCoordY = Math.floor(pixelCoordY / 256);
+
+      return {
+        x: tileCoordX,
+        y: tileCoordY,
+        pX: Math.floor(pixelCoordX - tileCoordX * 256),
+        pY: Math.floor(pixelCoordY - tileCoordY * 256),
+      };
+    },
+  }),
+};
+
+GSI.content = new GSI.Footer();
+
+/**
+ * 位置から標高を求める関数
+ * @param {number}  lat
+ * @param {number}  lng
+ * @returns {ElevationResult}
+ */
+export const getElevation = async (lat, lng) => {
+  return new Promise((resolve, reject) => {
+    const callback = (elevation, detail) => {
+      // console.log(`標高:${elevation}m`);
+      // console.log(`緯度:${detail?.pos.lat} 経度:${detail?.pos.lng}`);
+      resolve({ elevation, detail });
+    };
+
+    const initialz = 14;
+    GSI.content.execRefresh(lng, lat, initialz, callback);
+  });
+};
+
+```
